@@ -4,7 +4,7 @@
 ## Version: 1
 ## AddOnVersion: 1
 ## DependsOn: 
-## OptionalDependsOn: 
+## OptionalDependsOn: LibDebugLogger
 ## SavedVariables: 
 ## Description: Library to allow encoding of arbitrary lua tables into strings.
 

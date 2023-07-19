@@ -4,11 +4,11 @@ Charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
 
 Boolean true/false: !?
 Value end: ,
-String: <
+String: '
 table: {
 num indexed table: [
 StringId 1/2/3 chars: $§&
-integer number: +*/~#|
+integer number: <
 other numbers: =
 
 ]]
@@ -141,7 +141,7 @@ function EncodedDataHandler:EncodeItem(item)
 	if itemType == "table" then
 
 		local numEntries = NonContiguousCount(item)
-		
+
 		if #item == NonContiguousCount(item) then
 
 			self:AddString(controlChars.ARRAY)
@@ -163,12 +163,12 @@ function EncodedDataHandler:EncodeItem(item)
 
 			local stringId = self.dictionary[item]
 
-			if stringId > 262143 then				
+			if stringId > 262143 then
 				Print(LOG_LEVEL_WARNING, "StringId out of bounds. The dictionary may contain too many values. Falling back on adding the full string")
 				self:AddString(controlChars.STRING)
 				self:AddString(item)
 				self:AddString(controlChars.END)
-		
+
 			else
 				if stringId < 63 then
 					self:AddString(controlChars.STRINGID_1)
@@ -195,7 +195,7 @@ function EncodedDataHandler:EncodeItem(item)
 			self:AddString(controlChars.INT)
 			self:AddBase64(item)
 			self:AddString(controlChars.END)
-		
+
 		else
 			self:AddString(controlChars.NUMERIC)
 			self:AddString(tostring(item))
