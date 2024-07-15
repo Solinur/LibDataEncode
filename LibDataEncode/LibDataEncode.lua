@@ -57,10 +57,6 @@ end
 -- Locals
 
 local em = GetEventManager()
-local EncodeItem
-local EncodeArray
-local EncodeTable
-local Encode
 local log64 = math.log(64)
 
 -- Encoding table
@@ -134,39 +130,38 @@ function EncodedDataHandler:NewLine()
 
 end
 
-function EncodedDataHandler:EncodeItem(item)
+function EncodedDataHandler:EncodeItem(value)
 
-	local itemType = type(item)	-- not sure if an ESO addon should use "itemType" in such a context 
+	local valueType = type(value)
 
-	if itemType == "table" then
+	if valueType == "table" then
 
-		local numEntries = NonContiguousCount(item)
+		local numEntries = NonContiguousCount(value)
 
-		if #item == NonContiguousCount(item) then
+		if #value == numEntries then
 
 			self:AddString(controlChars.ARRAY)
-			self:EncodeArray(item)
+			self:EncodeArray(value)
 			self:AddString(controlChars.END)
 
 		else
 
 			self:AddString(controlChars.TABLE)
-			self:EncodeTable(item)
+			self:EncodeTable(value)
 			self:AddString(controlChars.END)
 
 
 		end
 
-	elseif itemType == "string" then
+	elseif valueType == "string" then
+		if self.dictionary[value] then
 
-		if self.dictionary[item] then
-
-			local stringId = self.dictionary[item]
+			local stringId = self.dictionary[value]
 
 			if stringId > 262143 then
 				Print(LOG_LEVEL_WARNING, "StringId out of bounds. The dictionary may contain too many values. Falling back on adding the full string")
 				self:AddString(controlChars.STRING)
-				self:AddString(item)
+				self:AddString(value)
 				self:AddString(controlChars.END)
 
 			else
@@ -181,38 +176,37 @@ function EncodedDataHandler:EncodeItem(item)
 			end
 		else
 			self:AddString(controlChars.STRING)
-			self:AddString(item)
+			self:AddString(value)
 			self:AddString(controlChars.END)
 		end
 
-		self:AddString(item)
+		self:AddString(value)
 		self:AddString(controlChars.END)
 
-	elseif itemType == "number" then
+	elseif valueType == "number" then
 
-		if math.floor(item) == item and item < 68719476736 then	-- for integers
-
+		if math.floor(value) == value and value < 68719476736 then	-- for integers
 			self:AddString(controlChars.INT)
-			self:AddBase64(item)
+			self:AddBase64(value)
 			self:AddString(controlChars.END)
 
 		else
 			self:AddString(controlChars.NUMERIC)
-			self:AddString(tostring(item))
+			self:AddString(tostring(value))
 			self:AddString(controlChars.END)
 		end
 
-	elseif itemType == "boolean" then
+	elseif valueType == "boolean" then
 
-		if item == true then
+		if value == true then
 			self:AddString(controlChars.TRUE)
 		else
 			self:AddString(controlChars.FALSE)
 		end
 
-	elseif itemType == "function" then
+	elseif valueType == "function" then
 
-		Print(LOG_LEVEL_WARNING, "Trying to encode a function. Functions can not be decoded.")
+		Print(LOG_LEVEL_INFO, "Encoding of functions is not supported.")
 
 	end
 
@@ -222,7 +216,7 @@ function EncodedDataHandler:EncodeArray(array)
 
 	for key, value in ipairs(array) do
 
-		EncodeItem(value)
+		self.EncodeItem(value)
 
 	end
 
@@ -232,8 +226,8 @@ function EncodedDataHandler:EncodeTable(table)
 
 	for key, value in pairs(table) do
 
-		EncodeItem(key)
-		EncodeItem(value)
+		self.EncodeItem(key)
+		self.EncodeItem(value)
 
 	end
 
