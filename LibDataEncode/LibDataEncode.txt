@@ -3,6 +3,7 @@
 ## Author: Solinur
 ## Version: 1
 ## AddOnVersion: 1
+## IsLibrary: true
 ## DependsOn: 
 ## OptionalDependsOn: LibDebugLogger
 ## SavedVariables: 
