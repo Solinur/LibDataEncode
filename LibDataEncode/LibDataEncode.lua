@@ -74,8 +74,8 @@ local controlCharConfig = {
 	["§"] = {"STRINGID_3", 3, "DecodeStringId"},
 	["$"] = {"STRING", nil, "DecodeString"},
 	["%"] = {"STRING_LONG", nil, "DecodeString"},
-	["["] = {"TABLE", nil, "DecodeTable"},
-	["{"] = {"ARRAY", nil, "DecodeArray"},
+	["{"] = {"TABLE", nil, "DecodeTable"},
+	["["] = {"ARRAY", nil, "DecodeArray"},
 	["+"] = {"UINT", nil, "DecodeInteger"},
 	["="] = {"NUMERIC", nil, "DecodeNumeric"},
 }
@@ -83,7 +83,7 @@ local controlCharConfig = {
 local charset = ""
 for i = 32, 126 do
 	local char = string.char(i)
-	if controlCharConfig[char] == nil and char ~= '"' then
+	if controlCharConfig[char] == nil and char ~= '"' and char ~= "'" then
 		charset = charset .. char
 	end
 end
@@ -217,7 +217,7 @@ end
 
 function EncodeDataHandler:AddString(str)
 	local numChars = str:len()
-	if self.currentStringLength + numChars > 999 then self:NewLine() end
+	if self.currentStringLength + numChars > 998 and str ~= controlChars.END then self:NewLine() end
 	self.currentString = self.currentString .. str
 	self.currentStringLength = self.currentStringLength + numChars
 end
@@ -227,9 +227,9 @@ function EncodeDataHandler:AddInteger(integer)
 	local str = ""
 
 	while integer > 0 do
-		local res = valueToChar[integer % 64]
+		local res = valueToChar[integer % charsetLength]
 		str = res .. str
-		integer = math.floor(integer / 64)
+		integer = math.floor(integer / charsetLength)
 	end
 	self:AddString(str)
 end
@@ -282,14 +282,14 @@ function EncodeDataHandler:EncodeItem(value)
 			local stringLength = value:len()
 			if stringLength < charsetLength then
 				self:AddString(controlChars.STRING)
-				self:AddInteger(stringLength)
+				self:AddInteger(stringLength+1)
 				self:AddString(value)
-			elseif stringLength < charsetLength^2 then
+			else
 				if stringLength > 996 then
 					Print(LOG_LEVEL_ERROR, "Trying to encode a string, which exceeds maximum length of 996 chars!")
 				end
 				self:AddString(controlChars.STRING_LONG)
-				self:AddInteger(stringLength)
+				self:AddInteger(stringLength+1)
 				self:AddString(value:sub(1, 996))
 			end
 		end
@@ -343,6 +343,7 @@ local DecodeDataHandler = ZO_InitializingObject:Subclass()
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function DecodeDataHandler:Initialize(encodedData)
+	TESTDATA2 = self
 	self.encodedStrings = encodedData
 	self.dictionary = {}
 	self.currentStringIndex = 1
@@ -371,7 +372,7 @@ function DecodeDataHandler:GetNextChar(noPosIncrement)
 	local encodedString, pos = self:GetCurrentStringAndPos()
 	if encodedString == nil then return controlChars.END end
 	if noPosIncrement ~= true then
-		self.currentStringPos = pos + 1
+		self:MoveCurrentPos(1)
 	end
 	Print(LOG_LEVEL_DEBUG, "Next char: %s - New pos: %d", encodedString:sub(pos, pos), self.currentStringPos)
 	return encodedString:sub(pos, pos)
@@ -381,10 +382,10 @@ end
 function DecodeDataHandler:GetEncodedItem(length)
 	local encodedString, pos = self:GetCurrentStringAndPos()
 	if length == nil then
-		length = encodedString:find(controlChars.END, pos, true) - pos	--TODO detect if "," is part of string!
+		length = encodedString:find(controlChars.END, pos, true) - pos
 		self:MoveCurrentPos(1)
 	end
-	self:MoveCurrentPos(length)
+	self:MoveCurrentPos(length)	
 	Print(LOG_LEVEL_DEBUG, "Item: %s - New pos: %d", encodedString:sub(pos, pos+length), self.currentStringPos)
 	return encodedString:sub(pos, pos+length-1)
 end
@@ -392,19 +393,27 @@ end
 
 function DecodeDataHandler:MoveCurrentPos(offset)
 	local newpos = self.currentStringPos + offset
-	if newpos < self.currentStringLength then
+	if newpos <= self.currentStringLength then
 		self.currentStringPos = newpos
 		return
 	end
 	self.currentStringIndex = self.currentStringIndex + 1
 	self.currentStringPos = 1
+	self.currentString = self:GetCurrentString()
+	if self.currentString ~= nil then
+		self.currentStringLength = self:GetCurrentString():len()
+	else
+		self.currentStringLength = nil
+	end
+
 end
 
 
 function DecodeDataHandler:DecodeItem()
 	local controlChar = self:GetNextChar()
 	local functionName = decoderFunctionNames[controlChar]
-	Print(LOG_LEVEL_DEBUG, "%s (%s):", functionName, controlChar)
+	if self[functionName] == nil then 
+		Print(LOG_LEVEL_DEBUG, "%s (%s), Index: %d, Pos: %d", tostring(functionName), controlChar, self.currentStringIndex, self.currentStringPos) end
 	return self[functionName](self, controlChar)
 end
 
@@ -428,7 +437,7 @@ function DecodeDataHandler:DecodeBase(encodedItem)
 	local value = 0
 	for i = 1, encodedItem:len() do
 		local char = encodedItem:sub(i,i)
-		value = value + charToValue[char] * charsetLength^(i-1)
+		value = value * charsetLength + charToValue[char]
 	end
 	Print(LOG_LEVEL_DEBUG, "IntChars: %s (%d):", encodedItem, value)
 	return value
@@ -440,7 +449,7 @@ function DecodeDataHandler:DecodeString(controlChar)
 	if controlChar == controlChars.STRING_LONG then
 		encodedLength = encodedLength .. self:GetNextChar()
 	end
-	local length = self:DecodeBase(encodedLength)
+	local length = self:DecodeBase(encodedLength)-1
 	return self:GetEncodedItem(length)
 end
 
@@ -488,14 +497,20 @@ local function CompareTables(t1, t2)
 		if type(v) == "table" and type(t2[k]) == "table" then
 			CompareTables(v, t2[k])
 		elseif v ~= t2[k] then
-			return false
+			if type(v) == "number" and tostring(v) ~= tostring(t2[k]) then
+				Print(LOG_LEVEL_INFO, "Index %s should be %s but is %s.", tostring(k), tostring(v), tostring(t2[k]))
+				return false
+			end
 		end
 	end
 	for k, v in pairs(t2) do
 		if type(v) == "table" and type(t1[k]) == "table" then
 			CompareTables(v, t1[k])
 		elseif v ~= t1[k] then
-			return false
+			if type(v) == "number" and tostring(v) ~= tostring(t1[k]) then
+				Print(LOG_LEVEL_INFO, "Index %s should be %s but is %s.", tostring(k), tostring(t1[k]), tostring(v))
+				return false
+			end
 		end
 	end
 	return true
@@ -504,11 +519,10 @@ end
 
 local function PerformTest(testTable, testDict, testname)
 	local encoded = lib.Encode(testTable, testDict)
-	local decoded = lib.Decode(encoded)
-	if lib.debug then TESTDATA = {testTable, decoded} end
+	local decoded, dict = lib.Decode(encoded)
 	local result = CompareTables(testTable, decoded)
 	Print(LOG_LEVEL_INFO, "Test '%s': %s", testname, tostring(result))
-	return result, encoded, decoded
+	return result, encoded, decoded, dict
 end
 lib.PerformTest = PerformTest
 
@@ -518,7 +532,7 @@ local subTable = {
 	["{1,2,3}"] = "A",
 	[0.5] = "asdada",
 	[1.5] = "bsdada",
-	[2.5] = "csdada",
+	[2.5] = "|H1:item:87874:364:50:26587:370:50:26:0:0:0:0:0:0:0:2049:24:0:1:0:423:0|h|h",
 	[-3] = ",!?#&§$%[{+=",
 }
 local testTable = {
@@ -529,11 +543,12 @@ local testTable = {
 	[0] = 0.5,
 	[1] = {"A", "B", "C"},
 	[2] = 0.5,
-	[3] = 0.5,
+	[3] = 0,
 	[4] = 0.5,
+	[5] = 1234567890,
+	[6] = 12345678901234567890,
 }
 local testDict = {0.5, 1.5, 2.5, "asdada", "bsdada", "csdada"}
-
 
 local function PerformSelfTest()
 	PerformTest(testTable, nil, "No Dictionary")
