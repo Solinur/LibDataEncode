@@ -503,7 +503,7 @@ end
 
 
 local function PerformTest(testTable, testDict, testname)
-	local encoded =lib.Encode(testTable, testDict)
+	local encoded = lib.Encode(testTable, testDict)
 	local decoded = lib.Decode(encoded)
 	if lib.debug then TESTDATA = {testTable, decoded} end
 	local result = CompareTables(testTable, decoded)
@@ -535,7 +535,7 @@ local testTable = {
 local testDict = {0.5, 1.5, 2.5, "asdada", "bsdada", "csdada"}
 
 
-function lib.PerformSelfTest()
+local function PerformSelfTest()
 	PerformTest(testTable, nil, "No Dictionary")
 	PerformTest(testTable, testDict, "With Dictionary")
 	PerformTest(testTable, true, "Auto Dictionary")
@@ -545,7 +545,7 @@ end
 local function Initialize(event, addon)
 	if addon ~= lib.name then return end
 	em:UnregisterForEvent(lib.name, EVENT_ADD_ON_LOADED)
-	lib.PerformSelfTest()
+	PerformSelfTest()
 end
 
 em:RegisterForEvent(lib.name, EVENT_ADD_ON_LOADED, Initialize)
