@@ -80,13 +80,7 @@ local controlCharConfig = {
 	["="] = {"NUMERIC", nil, "DecodeNumeric"},
 }
 
-local charset = ""
-for i = 32, 126 do
-	local char = string.char(i)
-	if controlCharConfig[char] == nil and char ~= '"' and char ~= "'" then
-		charset = charset .. char
-	end
-end
+local charset = " ()*-./0123456789:;<>@ABCDEFGHIJKLMNOPQRSTUVWXYZ\]^_`abcdefghijklmnopqrstuvwxyz|}~"
 
 local charsetLength = charset:len()
 local valueToChar = {}
@@ -97,6 +91,11 @@ for i = 1, charsetLength do
 	valueToChar[i-1] = char
 	charToValue[char] = i-1
 end
+lib.charsetConfig = {
+	charset = charset,
+	valueToChar = valueToChar,
+	charToValue = charToValue,
+}
 
 
 local controlChars = {}
@@ -117,7 +116,13 @@ DictionaryObject = ZO_InitializingObject:Subclass()
 
 
 ---@diagnostic disable-next-line: duplicate-set-field
-function DictionaryObject:Initialize(data)
+function DictionaryObject:Initialize(data, globalDictionary)
+	self.globalDictReverse = {}
+	if globalDictionary then
+		for k,v in pairs(globalDictionary) do
+			self.globalDictReverse[v] = k
+		end
+	end
 	self.dictionary = {}
 	self.counts = {[1] ={}, [2] ={}, [3] ={}}
 	self:ScanTable(data)
@@ -141,6 +146,7 @@ end
 
 
 function DictionaryObject:ValidateValue(value)
+	if self.globalDictReverse[value] then return false end
 	if type(value) == "number" then
 		if math.floor(value) == value then
 			return (value > 100 or value < 0)
@@ -171,8 +177,8 @@ function DictionaryObject:IncreaseCount(value)
 end
 
 
-local function MakeDictionary(data)
-	local dict = DictionaryObject:New(data)
+local function MakeDictionary(data, globalDictionary)
+	local dict = DictionaryObject:New(data, globalDictionary)
 	return dict.dictionary
 end
 lib.MakeDictionary = MakeDictionary
@@ -183,17 +189,22 @@ EncodeDataHandler = ZO_InitializingObject:Subclass()
 
 
 ---@diagnostic disable-next-line: duplicate-set-field
-function EncodeDataHandler:Initialize(data, dictionary)
+function EncodeDataHandler:Initialize(data, localDictionary, globalDictionary)
 	self.data = data
 	self.encodedStrings = {}
 	self.currentString = ""
 	self.currentStringLength = 0
+	self.globalDictionary = globalDictionary
 
-	self.dictionary = {}
-	self.reverseDictionary = {}
-	if dictionary ~= nil then
-		self:ReadDictionary(dictionary)
+	if globalDictionary == nil then
+		self.dictionary = {}
+	else 
+		self.dictionary = ZO_ShallowTableCopy(globalDictionary)
 	end
+	if localDictionary ~= nil then
+		self:InitDictionary(localDictionary)
+	end
+	self:MakeReverseDictionary()
 
 	self:EncodeItem(data)
 	self:NewLine()
@@ -203,17 +214,22 @@ function EncodeDataHandler:Initialize(data, dictionary)
 end
 
 
-function EncodeDataHandler:ReadDictionary(dictionary)
-	if dictionary == true then
-		dictionary = MakeDictionary(self.data)
+function EncodeDataHandler:InitDictionary(localDictionary)
+	if localDictionary == true then
+		localDictionary = MakeDictionary(self.data, self.globalDictionary)
 	end
-	self:EncodeDictionary(dictionary)
-	for k,v in pairs(dictionary) do
-		self.reverseDictionary[v] = k
+	self:EncodeDictionary(localDictionary)
+	for i, value in ipairs(localDictionary) do
+		self.dictionary[#self.dictionary+1] = value
 	end
-	self.dictionary = dictionary
 end
 
+function EncodeDataHandler:MakeReverseDictionary()
+	self.reverseDictionary = {}
+	for i,v in ipairs(self.dictionary) do
+		self.reverseDictionary[v] = i
+	end
+end
 
 function EncodeDataHandler:AddString(str)
 	local numChars = str:len()
@@ -226,6 +242,7 @@ end
 function EncodeDataHandler:AddInteger(integer)
 	local str = ""
 
+	if integer == 0 then str = valueToChar[0] end
 	while integer > 0 do
 		local res = valueToChar[integer % charsetLength]
 		str = res .. str
@@ -245,9 +262,10 @@ end
 
 
 function EncodeDataHandler:EncodeDictionary(dictionary)
-	self:AddString("D" .. controlChars.ARRAY)
-	self:EncodeArray(dictionary)
-	self:AddString(controlChars.END)
+	self:AddString("D")
+	local globalDictItems = self.globalDictionary~=nil and #self.globalDictionary or 0
+	self:EncodeItem(globalDictItems)
+	self:EncodeItem(dictionary)
 end
 
 
@@ -282,19 +300,19 @@ function EncodeDataHandler:EncodeItem(value)
 			local stringLength = value:len()
 			if stringLength < charsetLength then
 				self:AddString(controlChars.STRING)
-				self:AddInteger(stringLength+1)
+				self:AddInteger(stringLength)
 				self:AddString(value)
 			else
 				if stringLength > 996 then
 					Print(LOG_LEVEL_ERROR, "Trying to encode a string, which exceeds maximum length of 996 chars!")
 				end
 				self:AddString(controlChars.STRING_LONG)
-				self:AddInteger(stringLength+1)
+				self:AddInteger(stringLength)
 				self:AddString(value:sub(1, 996))
 			end
 		end
 	elseif valueType == "number" then
-		if math.floor(value) == value and value>0 and value < 68719476736 then	-- for integers
+		if math.floor(value) == value and value>=0 and value < 68719476736 then	-- for integers
 			self:AddString(controlChars.UINT)
 			self:AddInteger(value)
 			self:AddString(controlChars.END)
@@ -332,27 +350,45 @@ function EncodeDataHandler:EncodeTable(table)
 end
 
 
-function lib.Encode(data, dictionary)
-	local encodedData = EncodeDataHandler:New(data, dictionary)
+function lib.Encode(data, localDict, globalDict)
+	local encodedData = EncodeDataHandler:New(data, localDict, globalDict)
 	return encodedData.encodedStrings
 end
 
 -- Decoding
 local DecodeDataHandler = ZO_InitializingObject:Subclass()
 
+local dictSizeErrorMsg = "The supplied global dictionary does not have the correct number of items. Expected: %d, found: %d"
+local dictCharErrorMsg = "Invalid char encountered. Expected array control char: %s, found: %s"
 
 ---@diagnostic disable-next-line: duplicate-set-field
-function DecodeDataHandler:Initialize(encodedData)
-	TESTDATA2 = self
+function DecodeDataHandler:Initialize(encodedData, globalDict)
+	lib.testresult.decoder = self
 	self.encodedStrings = encodedData
+
 	self.dictionary = {}
+	local globalDictItems
+	if globalDict then 
+		ZO_ShallowTableCopy(globalDict, self.dictionary) 
+		globalDictItems = #globalDict
+	else
+		globalDictItems = 0
+	end
+
 	self.currentStringIndex = 1
 	self.currentStringPos = 1
 	self.currentString = self:GetCurrentString()
 	self.currentStringLength = string.len(self.currentString)
-	if encodedData[1]:sub(1, 2) == "D" .. controlChars.ARRAY then
+	if self:GetNextChar(true) == "D" then
 		self.currentStringPos = 3
-		self.dictionary = self:DecodeArray()
+		local expectedGlobalDictItems = self:DecodeInteger()
+		assert(expectedGlobalDictItems == globalDictItems, dictSizeErrorMsg:format(expectedGlobalDictItems, globalDictItems))
+		local nextChar = self:GetNextChar()
+		assert(controlChars.ARRAY == nextChar, dictCharErrorMsg:format(controlChars.ARRAY, nextChar))
+		local localDict = self:DecodeArray()
+		for i, item in ipairs(localDict) do
+			self.dictionary[globalDictItems+i] = item
+		end
 	end
 	self.data = self:DecodeItem()
 end
@@ -385,7 +421,7 @@ function DecodeDataHandler:GetEncodedItem(length)
 		length = encodedString:find(controlChars.END, pos, true) - pos
 		self:MoveCurrentPos(1)
 	end
-	self:MoveCurrentPos(length)	
+	self:MoveCurrentPos(length)
 	Print(LOG_LEVEL_DEBUG, "Item: %s - New pos: %d", encodedString:sub(pos, pos+length), self.currentStringPos)
 	return encodedString:sub(pos, pos+length-1)
 end
@@ -432,7 +468,6 @@ function DecodeDataHandler:DecodeStringId(controlChar)
 	return self.dictionary[stringId]
 end
 
-
 function DecodeDataHandler:DecodeBase(encodedItem)
 	local value = 0
 	for i = 1, encodedItem:len() do
@@ -449,7 +484,7 @@ function DecodeDataHandler:DecodeString(controlChar)
 	if controlChar == controlChars.STRING_LONG then
 		encodedLength = encodedLength .. self:GetNextChar()
 	end
-	local length = self:DecodeBase(encodedLength)-1
+	local length = self:DecodeBase(encodedLength)
 	return self:GetEncodedItem(length)
 end
 
@@ -486,8 +521,8 @@ function DecodeDataHandler:DecodeNumeric()
 end
 
 
-function lib.Decode(data)
-	local decoded = DecodeDataHandler:New(data)
+function lib.Decode(data, globalDict)
+	local decoded = DecodeDataHandler:New(data, globalDict)
 	return decoded.data, decoded.dictionary
 end
 
@@ -516,16 +551,19 @@ local function CompareTables(t1, t2)
 	return true
 end
 
-
-local function PerformTest(testTable, testDict, testname)
-	local encoded = lib.Encode(testTable, testDict)
-	local decoded, dict = lib.Decode(encoded)
+local function PerformTest(testname, testTable, testDictLocal, testDictGlobal)
+	lib.testresult = {}
+	lib.testresult.testDictGlobal = testDictGlobal
+	local encoded = lib.Encode(testTable, testDictLocal, testDictGlobal)
+	lib.testresult.encoded = encoded
+	local decoded, dict = lib.Decode(encoded, testDictGlobal)
+	lib.testresult.decoded = decoded
+	lib.testresult.dict = dict
 	local result = CompareTables(testTable, decoded)
+	lib.testresult.result = result
 	Print(LOG_LEVEL_INFO, "Test '%s': %s", testname, tostring(result))
-	return result, encoded, decoded, dict
 end
 lib.PerformTest = PerformTest
-
 
 local subTable = {
 	["A"] = 1,
@@ -547,13 +585,22 @@ local testTable = {
 	[4] = 0.5,
 	[5] = 1234567890,
 	[6] = 12345678901234567890,
+	[7] = {},
+	[8] = charsetLength - 1,
+	[9] = charsetLength,
+	[10] = charsetLength + 1,
+	[11] = "",
+	[12] = charset,
+	[13] = charset .. "x",
+	[14] = charset:sub(1,-2),
 }
 local testDict = {0.5, 1.5, 2.5, "asdada", "bsdada", "csdada"}
 
 local function PerformSelfTest()
-	PerformTest(testTable, nil, "No Dictionary")
-	PerformTest(testTable, testDict, "With Dictionary")
-	PerformTest(testTable, true, "Auto Dictionary")
+	PerformTest("No Dictionary", testTable)
+	PerformTest("With Dictionary", testTable, testDict)
+	PerformTest("Auto Dictionary", testTable, true)
+	PerformTest("Auto Dictionary + Global", testTable, true, testDict)
 end
 
 
