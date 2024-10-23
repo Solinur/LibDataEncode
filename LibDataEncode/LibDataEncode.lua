@@ -21,7 +21,6 @@ local LOG_LEVEL_WARNING ="W"
 local LOG_LEVEL_ERROR = "E"
 
 if LibDebugLogger then
-
 	logger = LibDebugLogger.Create(lib.shortName)
 
 	LOG_LEVEL_VERBOSE = LibDebugLogger.LOG_LEVEL_VERBOSE
@@ -29,7 +28,6 @@ if LibDebugLogger then
 	LOG_LEVEL_INFO = LibDebugLogger.LOG_LEVEL_INFO
 	LOG_LEVEL_WARNING = LibDebugLogger.LOG_LEVEL_WARNING
 	LOG_LEVEL_ERROR = LibDebugLogger.LOG_LEVEL_ERROR
-
 end
 
 
@@ -39,11 +37,9 @@ local function Print(level, ...)
 end
 
 -- Locals
-
 local em = GetEventManager()
 
 -- Utils
-
 local function spairs(t, order) -- from https://stackoverflow.com/questions/15706270/sort-a-table-in-lua
     local keys = {}
     for k in pairs(t) do keys[#keys+1] = k end
@@ -231,11 +227,13 @@ function EncodeDataHandler:MakeReverseDictionary()
 	end
 end
 
+local laststring = nil
 function EncodeDataHandler:AddString(str)
 	local numChars = str:len()
-	if self.currentStringLength + numChars > 998 and str ~= controlChars.END then self:NewLine() end
+	if self.currentStringLength + numChars > 998 and (str ~= controlChars.END or laststring == controlChars.END) then self:NewLine() end
 	self.currentString = self.currentString .. str
 	self.currentStringLength = self.currentStringLength + numChars
+	laststring = str
 end
 
 
@@ -344,15 +342,13 @@ end
 
 function EncodeDataHandler:EncodeTable(table)
 	for key, value in pairs(table) do
-		self:EncodeItem(key)
-		self:EncodeItem(value)
+		if type(key) == "function" or type(value) == "function" then 
+			Print(LOG_LEVEL_INFO, "Encoding of functions is not supported.")
+		else
+			self:EncodeItem(key)
+			self:EncodeItem(value)
+		end
 	end
-end
-
-
-function lib.Encode(data, localDict, globalDict)
-	local encodedData = EncodeDataHandler:New(data, localDict, globalDict)
-	return encodedData.encodedStrings
 end
 
 -- Decoding
@@ -363,36 +359,39 @@ local dictCharErrorMsg = "Invalid char encountered. Expected array control char:
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function DecodeDataHandler:Initialize(encodedData, globalDict)
-	lib.testresult.decoder = self
+	if lib.debug and lib.testresult then lib.testresult.decoder = self end
+
 	self.encodedStrings = encodedData
-
-	self.dictionary = {}
-	local globalDictItems
-	if globalDict then 
-		ZO_ShallowTableCopy(globalDict, self.dictionary) 
-		globalDictItems = #globalDict
-	else
-		globalDictItems = 0
-	end
-
 	self.currentStringIndex = 1
 	self.currentStringPos = 1
 	self.currentString = self:GetCurrentString()
 	self.currentStringLength = string.len(self.currentString)
-	if self:GetNextChar(true) == "D" then
+	self:InitDictionary(globalDict)
+	self.data = self:DecodeItem()
+end
+
+function DecodeDataHandler:InitDictionary(globalDict)
+	local globalDictItems = globalDict ~= nil and #globalDict or 0
+	if self.currentString:sub(1,2) == "D+" then
 		self.currentStringPos = 3
 		local expectedGlobalDictItems = self:DecodeInteger()
-		assert(expectedGlobalDictItems == globalDictItems, dictSizeErrorMsg:format(expectedGlobalDictItems, globalDictItems))
+		assert(expectedGlobalDictItems <= globalDictItems, dictSizeErrorMsg:format(expectedGlobalDictItems, globalDictItems))
+
 		local nextChar = self:GetNextChar()
 		assert(controlChars.ARRAY == nextChar, dictCharErrorMsg:format(controlChars.ARRAY, nextChar))
+
+		self.dictionary = {}
+		for i=1,expectedGlobalDictItems do
+			self.dictionary[i] = globalDict[i]
+		end
 		local localDict = self:DecodeArray()
 		for i, item in ipairs(localDict) do
 			self.dictionary[globalDictItems+i] = item
 		end
+	elseif globalDictItems > 0 then
+		self.dictionary = ZO_ShallowTableCopy(globalDict)
 	end
-	self.data = self:DecodeItem()
 end
-
 
 function DecodeDataHandler:GetCurrentString()
 	return self.encodedStrings[self.currentStringIndex]
@@ -521,12 +520,6 @@ function DecodeDataHandler:DecodeNumeric()
 end
 
 
-function lib.Decode(data, globalDict)
-	local decoded = DecodeDataHandler:New(data, globalDict)
-	return decoded.data, decoded.dictionary
-end
-
-
 local function CompareTables(t1, t2)
 	for k, v in pairs(t1) do
 		if type(v) == "table" and type(t2[k]) == "table" then
@@ -552,17 +545,30 @@ local function CompareTables(t1, t2)
 end
 
 local function PerformTest(testname, testTable, testDictLocal, testDictGlobal)
-	lib.testresult = {}
-	lib.testresult.testDictGlobal = testDictGlobal
+	local testresult = {}
+	testresult.testDictGlobal = testDictGlobal
 	local encoded = lib.Encode(testTable, testDictLocal, testDictGlobal)
-	lib.testresult.encoded = encoded
+	testresult.encoded = encoded
 	local decoded, dict = lib.Decode(encoded, testDictGlobal)
-	lib.testresult.decoded = decoded
-	lib.testresult.dict = dict
+	testresult.decoded = decoded
+	testresult.dict = dict
 	local result = CompareTables(testTable, decoded)
-	lib.testresult.result = result
-	Print(LOG_LEVEL_INFO, "Test '%s': %s", testname, tostring(result))
+	testresult.result = result
+	Print(LOG_LEVEL_INFO, "Test '%s': %s", testname, result and "passed" or "failed")
+	if lib.debug then lib.testresult = testresult end
+	return testresult
 end
+
+function lib.Encode(data, localDict, globalDict)
+	local encodedData = EncodeDataHandler:New(data, localDict, globalDict)
+	return encodedData.encodedStrings
+end
+
+function lib.Decode(data, globalDict)
+	local decoded = DecodeDataHandler:New(data, globalDict)
+	return decoded.data, decoded.dictionary
+end
+
 lib.PerformTest = PerformTest
 
 local subTable = {
