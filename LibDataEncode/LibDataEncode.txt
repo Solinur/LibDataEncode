@@ -6,7 +6,6 @@
 ## IsLibrary: true
 ## DependsOn: 
 ## OptionalDependsOn: LibDebugLogger
-## SavedVariables: 
 ## Description: Library to allow encoding of arbitrary lua tables into strings.
 
 ; This Add-on is not created by, affiliated with or sponsored by ZeniMax Media Inc. or its affiliates.
