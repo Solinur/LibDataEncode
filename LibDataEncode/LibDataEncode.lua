@@ -6,8 +6,8 @@ local lib = LibDataEncode
 lib.name = "LibDataEncode"
 lib.shortName = "LDE"
 lib.version = "1"
-lib.internal = {}
 lib.debug = GetDisplayName() == "@Solinur"
+lib.internal = {}
 local libint = lib.internal
 
 -- Logger
@@ -172,10 +172,10 @@ end
 
 
 local function MakeDictionary(data, globalDictionary)
+	if type(data) ~= "table" then return {} end
 	local dict = DictionaryObject:New(data, globalDictionary)
 	return dict.dictionary
 end
-lib.MakeDictionary = MakeDictionary
 
 
 -- Encoding
@@ -218,6 +218,7 @@ function EncodeDataHandler:InitDictionary(localDictionary)
 		self.dictionary[#self.dictionary+1] = value
 	end
 end
+
 
 function EncodeDataHandler:MakeReverseDictionary()
 	self.reverseDictionary = {}
@@ -265,6 +266,7 @@ function EncodeDataHandler:EncodeDictionary(dictionary)
 	self:EncodeItem(dictionary)
 end
 
+
 function EncodeDataHandler:CheckForStringId(value)
 	if
 		self.reverseDictionary and
@@ -272,6 +274,7 @@ function EncodeDataHandler:CheckForStringId(value)
 		self.reverseDictionary[value] ~= nil then return self.reverseDictionary[value]
 	end
 end
+
 
 function EncodeDataHandler:EncodeItem(value)
 	local valueType = type(value)
@@ -333,7 +336,7 @@ function EncodeDataHandler:EncodeItem(value)
 		end
 
 	elseif valueType == "function" then
-		Print(LOG_LEVEL_INFO, "Encoding of functions is not supported.")
+		Print(LOG_LEVEL_DEBUG, "Encoding of functions is not supported.")
 	end
 end
 
@@ -348,13 +351,14 @@ end
 function EncodeDataHandler:EncodeTable(table)
 	for key, value in pairs(table) do
 		if type(key) == "function" or type(value) == "function" then 
-			Print(LOG_LEVEL_INFO, "Encoding of functions is not supported.")
+			Print(LOG_LEVEL_DEBUG, "Encoding of functions is not supported.")
 		else
 			self:EncodeItem(key)
 			self:EncodeItem(value)
 		end
 	end
 end
+
 
 -- Decoding
 local DecodeDataHandler = ZO_InitializingObject:Subclass()
@@ -374,6 +378,7 @@ function DecodeDataHandler:Initialize(encodedData, globalDict)
 	self:InitDictionary(globalDict)
 	self.data = self:DecodeItem()
 end
+
 
 function DecodeDataHandler:InitDictionary(globalDict)
 	local globalDictItems = globalDict ~= nil and #globalDict or 0
@@ -397,6 +402,7 @@ function DecodeDataHandler:InitDictionary(globalDict)
 		self.dictionary = ZO_ShallowTableCopy(globalDict)
 	end
 end
+
 
 function DecodeDataHandler:GetCurrentString()
 	return self.encodedStrings[self.currentStringIndex]
@@ -472,6 +478,7 @@ function DecodeDataHandler:DecodeStringId(controlChar)
 	return self.dictionary[stringId]
 end
 
+
 function DecodeDataHandler:DecodeBase(encodedItem)
 	local value = 0
 	for i = 1, encodedItem:len() do
@@ -526,12 +533,14 @@ end
 
 
 local function CompareTables(t1, t2)
+	if type(t1) ~= type(t2) then return false end
+	if type(t1) ~= "table" then return t1 == t2 end
 	for k, v in pairs(t1) do
 		if type(v) == "table" and type(t2[k]) == "table" then
 			CompareTables(v, t2[k])
 		elseif v ~= t2[k] then
 			if type(v) == "number" and tostring(v) ~= tostring(t2[k]) then
-				Print(LOG_LEVEL_INFO, "Index %s should be %s but is %s.", tostring(k), tostring(v), tostring(t2[k]))
+				Print(LOG_LEVEL_DEBUG, "Index %s should be %s but is %s.", tostring(k), tostring(v), tostring(t2[k]))
 				return false
 			end
 		end
@@ -541,7 +550,7 @@ local function CompareTables(t1, t2)
 			CompareTables(v, t1[k])
 		elseif v ~= t1[k] then
 			if type(v) == "number" and tostring(v) ~= tostring(t1[k]) then
-				Print(LOG_LEVEL_INFO, "Index %s should be %s but is %s.", tostring(k), tostring(t1[k]), tostring(v))
+				Print(LOG_LEVEL_DEBUG, "Index %s should be %s but is %s.", tostring(k), tostring(t1[k]), tostring(v))
 				return false
 			end
 		end
@@ -549,16 +558,17 @@ local function CompareTables(t1, t2)
 	return true
 end
 
-local function PerformTest(testname, testTable, testDictLocal, testDictGlobal)
+local function PerformTest(testname, testData, testDictLocal, testDictGlobal)
 	local testresult = {}
 	if lib.debug then lib.testresult = testresult end
 	testresult.testDictGlobal = testDictGlobal
-	local encoded = lib.Encode(testTable, testDictLocal, testDictGlobal)
+	local encoded = lib.Encode(testData, testDictLocal, testDictGlobal)
 	testresult.encoded = encoded
+	if testDictGlobal then testDictGlobal[#testDictGlobal] = "testDictGlobal" end
 	local decoded, dict = lib.Decode(encoded, testDictGlobal)
 	testresult.decoded = decoded
 	testresult.dict = dict
-	local result = CompareTables(testTable, decoded)
+	local result = CompareTables(testData, decoded)
 	testresult.result = result
 	Print(LOG_LEVEL_INFO, "Test '%s': %s", testname, result and "passed" or "failed")
 	return testresult
@@ -569,11 +579,12 @@ function lib.Encode(data, localDict, globalDict)
 	return encodedData.encodedStrings
 end
 
-function lib.Decode(data, globalDict)
-	local decoded = DecodeDataHandler:New(data, globalDict)
+function lib.Decode(encodedData, globalDict)
+	local decoded = DecodeDataHandler:New(encodedData, globalDict)
 	return decoded.data, decoded.dictionary
 end
 
+lib.MakeDictionary = MakeDictionary
 lib.PerformTest = PerformTest
 
 local subTable = {
@@ -608,12 +619,13 @@ local testTable = {
 local testDict = {0.5, 1.5, 2.5, "asdada", "bsdada", "csdada"}
 
 local function PerformSelfTest()
+	PerformTest("No Dictionary, One string only", "testString")
 	PerformTest("No Dictionary", testTable)
 	PerformTest("With Dictionary", testTable, testDict)
 	PerformTest("Auto Dictionary", testTable, true)
+	PerformTest("Auto Dictionary, One string only", "testString", true)
 	PerformTest("Auto Dictionary + Global", testTable, true, testDict)
 end
-
 
 local function Initialize(event, addon)
 	if addon ~= lib.name then return end
