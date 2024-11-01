@@ -2,7 +2,6 @@
 if LibDataEncode == nil then LibDataEncode = {} end
 local lib = LibDataEncode
 
-
 -- Basic values
 lib.name = "LibDataEncode"
 lib.shortName = "LDE"
@@ -10,7 +9,6 @@ lib.version = "1"
 lib.internal = {}
 lib.debug = GetDisplayName() == "@Solinur"
 local libint = lib.internal
-
 
 -- Logger
 local logger
@@ -122,7 +120,7 @@ function DictionaryObject:Initialize(data, globalDictionary)
 	self.dictionary = {}
 	self.counts = {[1] ={}, [2] ={}, [3] ={}}
 	self:ScanTable(data)
-	for key, value in spairs(self.counts[3], function(t,a,b) return (t[a] < t[b]) end) do
+	for key, value in spairs(self.counts[3], function(t,a,b) return (t[a] > t[b]) end) do
 		table.insert(self.dictionary, key)
 	end
 end
@@ -186,6 +184,7 @@ EncodeDataHandler = ZO_InitializingObject:Subclass()
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function EncodeDataHandler:Initialize(data, localDictionary, globalDictionary)
+	if lib.debug and lib.testresult then lib.testresult.encoder = self end
 	self.data = data
 	self.encodedStrings = {}
 	self.currentString = ""
@@ -266,11 +265,29 @@ function EncodeDataHandler:EncodeDictionary(dictionary)
 	self:EncodeItem(dictionary)
 end
 
+function EncodeDataHandler:CheckForStringId(value)
+	if
+		self.reverseDictionary and
+		(type(value) == "number" or type(value) == "string") and
+		self.reverseDictionary[value] ~= nil then return self.reverseDictionary[value]
+	end
+end
 
 function EncodeDataHandler:EncodeItem(value)
 	local valueType = type(value)
+	local stringId = self:CheckForStringId(value)
 
-	if valueType == "table" then
+	if stringId and stringId < charsetLength^3 then
+		if stringId < charsetLength then
+			self:AddString(controlChars.STRINGID_1)
+		elseif stringId < charsetLength^2 then
+			self:AddString(controlChars.STRINGID_2)
+		else
+			self:AddString(controlChars.STRINGID_3)
+		end
+		self:AddInteger(stringId)
+		
+	elseif valueType == "table" then
 		local numEntries = NonContiguousCount(value)
 
 		if #value == numEntries then
@@ -284,30 +301,18 @@ function EncodeDataHandler:EncodeItem(value)
 		end
 
 	elseif valueType == "string" then
-		local stringId = self.dictionary[value]
-		if stringId and stringId < charsetLength^3 then
-			if stringId < charsetLength then
-				self:AddString(controlChars.STRINGID_1)
-			elseif stringId < charsetLength^2 then
-				self:AddString(controlChars.STRINGID_2)
-			else
-				self:AddString(controlChars.STRINGID_3)
-			end
-			self:AddInteger(stringId)
+		local stringLength = value:len()
+		if stringLength < charsetLength then
+			self:AddString(controlChars.STRING)
+			self:AddInteger(stringLength)
+			self:AddString(value)
 		else
-			local stringLength = value:len()
-			if stringLength < charsetLength then
-				self:AddString(controlChars.STRING)
-				self:AddInteger(stringLength)
-				self:AddString(value)
-			else
-				if stringLength > 996 then
-					Print(LOG_LEVEL_ERROR, "Trying to encode a string, which exceeds maximum length of 996 chars!")
-				end
-				self:AddString(controlChars.STRING_LONG)
-				self:AddInteger(stringLength)
-				self:AddString(value:sub(1, 996))
+			if stringLength > 996 then
+				Print(LOG_LEVEL_ERROR, "Trying to encode a string, which exceeds maximum length of 996 chars!")
 			end
+			self:AddString(controlChars.STRING_LONG)
+			self:AddInteger(stringLength)
+			self:AddString(value:sub(1, 996))
 		end
 	elseif valueType == "number" then
 		if math.floor(value) == value and value>=0 and value < 68719476736 then	-- for integers
@@ -546,6 +551,7 @@ end
 
 local function PerformTest(testname, testTable, testDictLocal, testDictGlobal)
 	local testresult = {}
+	if lib.debug then lib.testresult = testresult end
 	testresult.testDictGlobal = testDictGlobal
 	local encoded = lib.Encode(testTable, testDictLocal, testDictGlobal)
 	testresult.encoded = encoded
@@ -555,7 +561,6 @@ local function PerformTest(testname, testTable, testDictLocal, testDictGlobal)
 	local result = CompareTables(testTable, decoded)
 	testresult.result = result
 	Print(LOG_LEVEL_INFO, "Test '%s': %s", testname, result and "passed" or "failed")
-	if lib.debug then lib.testresult = testresult end
 	return testresult
 end
 
